@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 ROOT = Path(__file__).resolve().parent.parent
 UA = "Mozilla/5.0 (compatible; ecolodge-invest-bot/1.0; veille perso)"
-PRICE_RE = re.compile(r"(\d{1,3}(?:[ \u00a0\u202f.]\d{3})+|\d{4,7})\s*(?:€|eur|euros|\$)", re.I)
+PRICE_RE = re.compile(r"(?<![\d/])(\d{1,3}(?:[ \u00a0\u202f.]\d{3})+|\d{4,7})[ \u00a0\u202f]*(?:€|eur|euros|\$)", re.I)
 SOLD_RE = re.compile(r"\b(vendu|sold|plus disponible|annonce expir[ée]e)\b", re.I)
 
 
@@ -22,10 +22,13 @@ def page_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style", "noscript"]):
         t.decompose()
-    return re.sub(r"\s+", " ", soup.get_text(" "))
+    txt = soup.get_text("\n")
+    txt = re.sub(r"[ \t\r\f\v]+", " ", txt)          # garde les \n et les espaces insécables
+    return re.sub(r"\n\s*\n+", "\n", txt).strip()
 
 
-def analyse(text: str, anchor: str, side: str = "after", window: int = 300) -> dict:
+def analyse(text: str, anchor: str, side: str = "after", window: int = 300,
+            check_sold: bool = True) -> dict:
     """Prix + statut du bien repéré par `anchor`.
 
     side="after"  : le prix suit le titre (cas le plus courant)
@@ -57,7 +60,11 @@ def analyse(text: str, anchor: str, side: str = "after", window: int = 300) -> d
         if 20_000 <= v <= 10_000_000:
             price = v
     sold = bool(SOLD_RE.search(sold_zone))
-    return {"found": True, "price": price, "status": "vendu/expiré" if sold else "actif"}
+    if not check_sold:
+        status = "inconnu (à confirmer)"
+    else:
+        status = "vendu/expiré" if sold else "actif"
+    return {"found": True, "price": price, "status": status}
 
 
 def fetch(url: str, retries: int = 2):
@@ -93,7 +100,8 @@ def main() -> int:
             new[s["id"]] = {**prev, "name": s["name"], "url": url,
                             "last_error": err, "checked_at": now}
             continue
-        res = analyse(page_text(html), s["anchor"], s.get("price_side", "after"))
+        res = analyse(page_text(html), s["anchor"], s.get("price_side", "after"),
+                      s.get("window", 300), s.get("check_sold", True))
         res["expected_price"] = s.get("expected_price")
         rec = {"name": s["name"], "url": url, "units": s.get("units"),
                **res, "last_error": None, "checked_at": now}
